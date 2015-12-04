@@ -1,0 +1,119 @@
+# Note replace 'e_commons' with your e_commons to put stuff in your home directory
+
+### 0)
+# Follow the instructions at https://wiki.med.harvard.edu/Orchestra/LSFParallelJobs#Preparation
+# for setting up rsh keys
+
+### 1)
+
+bsub -W 3:0 -Is -q interactive bash # don't run stuff on the login node, get an interactive node for 3 hours (-W hours:mins; -q interactive, -Is)
+
+# Set up a virtual environment called 'fisedvenv' using dev/python/3.4.2 in the directory /home/user/fised_working/
+
+virtualenv -p /opt/python-3.4.2/bin/python fisedvenv --system-site-packages
+source fisedvenv/bin/activate
+
+### 2)
+# Install necessary packages:
+
+#	numpy
+pip install numpy
+#	mpi4py
+env MPICC=/opt/openmpi/1.8.6/bin/mpicc pip install mpi4py
+# 	Cython
+pip install Cython
+#	ipython
+pip install ipython
+#	ipyparallel
+pip install ipyparallel
+#	HDF5
+wget http://www.hdfgroup.org/ftp/HDF5/current/src/hdf5-1.8.16.tar
+tar xf hdf5-1.8.16.tar
+cd hdf5-1.8.16
+CC=/opt/openmpi/1.8.6/bin/mpicc ./configure --with-zlib=/opt/zlib-1.2.8/ --enable-parallel --enable-shared --prefix=/home/e_commons/hdf5-1.8.16-mpi
+make
+make check  # fails due to sparse array limitation on CentOS?
+make install
+cd ..
+#	h5py
+wget https://pypi.python.org/packages/source/h/h5py/h5py-2.5.0.tar.gz#md5=6e4301b5ad5da0d51b0a1e5ac19e3b74
+tar xf h5py-2.5.0.tar.gz
+cd h5py-2.5.0
+
+# edit a line here to make it work (as in https://github.com/rdhyee/h5py/commit/f2e3f132fdc1c2308b74e8428c063ac6a8118439#diff-c9e1291e5e01f0f5e0a484dccaf67cf6L28)
+
+# nano h5py/h5p.pyx
+
+# -    from mpi4py.mpi_c cimport MPI_Comm, MPI_Info, MPI_Comm_dup, MPI_Info_dup, \
+# +    from mpi4py.libmpi cimport MPI_Comm, MPI_Info, MPI_Comm_dup, MPI_Info_dup, \
+
+
+export CC=/opt/openmpi/1.8.6/bin/mpicc
+python setup.py configure --mpi --hdf5=/home/e_commons/hdf5-1.8.16-mpi
+python setup.py build
+python setup.py install
+cd ..
+# distarray
+pip install distarray
+
+### 3)
+# Clean up and add environment stuff
+
+# Add lines to .bashrc profile (some one help me with this, should this stuff be in .profile, .bash_profile, .bashrc??)
+module load dev/openmpi-1.8.6
+
+# Add to path (where?)
+/home/e_commons/hdf5-1.8.16-mpi
+
+# I have in my notes that I had to edit line 29 in 
+# /fised_working/fisedvenv/lib/python3.4/site-packages/distarray-0.6.0-py3.4.egg/distarray/apps/dacluster.py
+
+# nano /fised_working/fisedvenv/lib/python3.4/site-packages/distarray-0.6.0-py3.4.egg/distarray/apps/dacluster.py
+
+# 	if six.PY2 or is_anaconda:
+#     	ipcluster_cmd = 'ipcluster'
+# 	elif six.PY3:
+# -    	ipcluster_cmd = 'ipcluster3' 
+# +   	ipcluster_cmd = 'ipcluster'
+# 	else:
+#     	raise NotImplementedError("Not run with Python 2 *or* 3?")
+
+### 4)
+# Configure ipcluster and test
+
+ipython profile create --parallel --profile=mpi
+
+# Modify the file ~/.ipython/profile_mpi/ipcluster_config.py to include at the top
+# c.IPClusterEngines.engine_launcher_class = 'MPIEngineSetLauncher'
+# c.HubFactory.ip = '*'
+
+# Start an ipcluster remotely
+bsub -W 1:0 -q mpi -n 4 -R span[ptile=1] 'ipcluster start -n 4 --profile=mpi' # 1 hour job with 4 cores, each of the four cores is guaranteed to be on a different computer by -R span[ptile=1]
+
+# Use the command bjobs to see if the job is running
+bjobs
+
+# once the job is STAT RUN then you can start to do parallel computing
+
+ipython
+import ipyparallel as pyp
+c = pyp.Client(profile='mpi')
+c[:].apply_sync(lambda : "Hello, World")
+#Out[4]: ['Hello, World', 'Hello, World', 'Hello, World', 'Hello, World']
+def getpid():
+	import os
+	return os.getpid()
+c[:].apply_sync(getpid)
+#Out[24]: [5878, 13484, 9134, 23816]
+getpid()
+#Out[25]: 7475
+# Wow -- I'm working on one computer and getting stuff from others!!
+
+
+### 5)
+# Other ways to use this:
+
+# I was able to run this entire thing: http://docs.enthought.com/distarray/pages/features.html
+# Including doing the HDF5 stuff
+
+
